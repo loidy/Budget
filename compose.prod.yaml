@@ -1,0 +1,50 @@
+# Production stack: published GHCR image behind a Postgres container.
+#   docker compose -f compose.prod.yaml pull
+#   docker compose -f compose.prod.yaml up -d
+#   docker compose -f compose.prod.yaml exec web npm run prisma:deploy
+#   docker compose -f compose.prod.yaml exec web npm run create-superuser
+#
+# To build locally instead of pulling:
+#   docker compose -f compose.prod.yaml up -d --build
+#
+# Pin a published tag with IMAGE_TAG (default: latest).
+# POSTGRES_PASSWORD, BETTER_AUTH_SECRET, and BETTER_AUTH_URL are required.
+name: budget-prod
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-budget}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-budget}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-budget} -d ${POSTGRES_DB:-budget}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  web:
+    image: ghcr.io/loidy/budget:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      target: runner
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-budget}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-budget}?schema=public
+      NODE_ENV: production
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:?BETTER_AUTH_URL must be set}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+    ports:
+      - '${WEB_PORT:-3000}:3000'
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+
+volumes:
+  db-data:

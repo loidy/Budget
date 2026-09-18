@@ -1,0 +1,21 @@
+node_modules/
+.next/
+out/
+build/
+
+# Generated Prisma client (recreated by `prisma generate`)
+src/generated/
+
+.env
+.env*.local
+
+*.log
+npm-debug.log*
+
+.DS_Store
+next-env.d.ts
+*.tsbuildinfo
+
+# Local README recording artifacts
+docs/.demo-frames/
+docs/.demo-state.json

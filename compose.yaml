@@ -1,0 +1,56 @@
+# Development stack: hot-reloading Next.js against a local Postgres container.
+#   docker compose up --build -d
+#   docker compose exec web npm run prisma:deploy
+name: budget-dev
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-budget}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-budget}
+      POSTGRES_DB: ${POSTGRES_DB:-budget}
+    ports:
+      # Exposed so `npx prisma studio` and psql work from the host.
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-budget} -d ${POSTGRES_DB:-budget}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: .
+      target: dev
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-budget}:${POSTGRES_PASSWORD:-budget}@db:5432/${POSTGRES_DB:-budget}?schema=public
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3000}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+    # Regenerating on start keeps the client in sync after a schema edit.
+    # Migrations are a separate command: docker compose exec web npm run prisma:deploy
+    command: sh -c "npx prisma generate && npm run dev"
+    ports:
+      - '${WEB_PORT:-3000}:3000'
+    volumes:
+      - .:/app
+      # Container-built artifacts must not leak into the bind-mounted host tree,
+      # where they would land as root-owned files.
+      - node-modules:/app/node_modules
+      - next-cache:/app/.next
+      - prisma-client:/app/src/generated
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  node-modules:
+  next-cache:
+  prisma-client:

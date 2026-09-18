@@ -1,0 +1,383 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum ExpenseFrequency {
+  monthly
+  annual
+}
+
+enum BudgetItemType {
+  income
+  expense
+}
+
+model User {
+  id            String    @id
+  name          String
+  email         String
+  emailVerified Boolean
+  image         String?
+  createdAt     DateTime
+  updatedAt     DateTime
+  sessions      Session[]
+  accounts      Account[]
+  ownedHouses   House[]        @relation("HouseOwner")
+  memberships   HouseMember[]
+  userInvites   UserInvite[]
+
+  @@unique([email])
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String
+  createdAt DateTime
+  updatedAt DateTime
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([token])
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime
+  updatedAt             DateTime
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String    @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime?
+  updatedAt  DateTime?
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+/// A budget scope: a household or a company. Everything else hangs off a House.
+model House {
+  id          String   @id
+  name        String
+  description String?
+  icon        String   @default("home")
+  position    Int      @default(0)
+  ownerId     String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  owner      User          @relation("HouseOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members    HouseMember[]
+  invite     HouseInvite?
+  accounts   BankAccount[]
+  labels     Label[]
+  incomes    Income[]
+  expenses   Expense[]
+  monthPlans MonthPlan[]
+  catalogTableViews CatalogTableView[]
+  catalogSnapshots CatalogSnapshot[]
+
+  @@index([position])
+  @@index([ownerId])
+}
+
+/// Shared access to a house. The owner is stored on House, not duplicated here.
+model HouseMember {
+  id        String   @id
+  houseId   String
+  userId    String
+  createdAt DateTime @default(now())
+
+  house House @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([houseId, userId])
+  @@index([userId])
+}
+
+/// Reusable share link for a house. Opening it signs in a new user and lets them
+/// set their name, email, and password. Distinct from UserInvite: this also
+/// grants membership in the house.
+model HouseInvite {
+  id        String   @id
+  token     String   @unique
+  houseId   String   @unique
+  createdAt DateTime @default(now())
+
+  house House @relation(fields: [houseId], references: [id], onDelete: Cascade)
+}
+
+/// Invitation to create an account with no houses. Opening the URL lets the
+/// invitee set their own password; it does not share any house.
+model UserInvite {
+  id          String    @id
+  token       String    @unique
+  name        String
+  email       String
+  createdById String
+  createdAt   DateTime  @default(now())
+  consumedAt  DateTime?
+
+  createdBy User @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([email])
+  @@index([createdById])
+}
+
+/// A bank account is only a name and color. Visibility is an ordered level:
+/// 0 everywhere (dashboard + plan), 1 excluded from the dashboard, 2 excluded
+/// from all views (virtual / untracked transactions).
+model BankAccount {
+  id         String  @id
+  houseId    String
+  name       String
+  color      String  @default("#2563eb")
+  visibility Int     @default(0)
+  position   Int     @default(0)
+
+  house           House            @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  labels          Label[]
+  incomes         Income[]
+  expenses        Expense[]
+  overrides       PlanOverride[]
+  customItems     CustomItem[]
+  openingBalances OpeningBalance[]
+
+  @@index([houseId])
+}
+
+/// Labels belong to an account. An item carrying a label is categorized under
+/// that account, overriding the item's own account assignment.
+model Label {
+  id        String @id
+  houseId   String
+  name      String
+  color     String @default("#8b5cf6")
+  accountId String
+  position  Int    @default(0)
+
+  house       House          @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  account     BankAccount    @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  incomes     Income[]
+  expenses    Expense[]
+  overrides   PlanOverride[]
+  customItems CustomItem[]
+
+  @@index([houseId])
+  @@index([accountId])
+}
+
+/// Recurring monthly income in the master catalog.
+model Income {
+  id           String  @id
+  houseId      String
+  name         String
+  amount       Decimal @db.Decimal(14, 2)
+  day          Int
+  labelId      String?
+  accountId    String?
+  notes        String?
+  isActive     Boolean @default(true)
+  position     Int     @default(0)
+  snapshotId   String?
+  sourceItemId String?
+
+  house    House            @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  snapshot CatalogSnapshot? @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  label    Label?           @relation(fields: [labelId], references: [id], onDelete: SetNull)
+  account  BankAccount?     @relation(fields: [accountId], references: [id], onDelete: SetNull)
+
+  @@index([houseId])
+  @@index([houseId, snapshotId])
+}
+
+/// Recurring expense in the master catalog. Annual expenses only land in `month`.
+/// Amounts may be negative to model offsets and reimbursements.
+model Expense {
+  id           String           @id
+  houseId      String
+  name         String
+  amount       Decimal          @db.Decimal(14, 2)
+  day          Int
+  frequency    ExpenseFrequency @default(monthly)
+  month        Int?
+  labelId      String?
+  accountId    String?
+  notes        String?
+  isActive     Boolean          @default(true)
+  position     Int              @default(0)
+  snapshotId   String?
+  sourceItemId String?
+
+  house    House            @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  snapshot CatalogSnapshot? @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  label    Label?           @relation(fields: [labelId], references: [id], onDelete: SetNull)
+  account  BankAccount?     @relation(fields: [accountId], references: [id], onDelete: SetNull)
+
+  @@index([houseId])
+  @@index([houseId, frequency])
+  @@index([houseId, snapshotId])
+}
+
+/// A frozen copy of the catalog, valid for all months up to and including `validUntil`.
+model CatalogSnapshot {
+  id         String   @id
+  houseId    String
+  validUntil String
+  createdAt  DateTime @default(now())
+
+  house    House     @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  incomes  Income[]
+  expenses Expense[]
+
+  @@unique([houseId, validUntil])
+  @@index([houseId, validUntil])
+}
+
+/// Per-month plan holding the deviations from the master catalog.
+model MonthPlan {
+  id       String @id
+  houseId  String
+  monthKey String
+
+  house           House            @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  overrides       PlanOverride[]
+  customItems     CustomItem[]
+  settledItems    SettledItem[]
+  itemOrders      PlanItemOrder[]
+  openingBalances OpeningBalance[]
+
+  @@unique([houseId, monthKey])
+  @@index([houseId])
+}
+
+/// A one-month deviation from a master catalog item (different amount, day, ...).
+model PlanOverride {
+  id             String         @id
+  monthPlanId    String
+  originalItemId String
+  type           BudgetItemType
+  name           String
+  amount         Decimal        @db.Decimal(14, 2)
+  day            Int
+  accountId      String?
+  labelId        String?
+  isPaid         Boolean?
+  notes          String?
+
+  monthPlan MonthPlan    @relation(fields: [monthPlanId], references: [id], onDelete: Cascade)
+  account   BankAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  label     Label?       @relation(fields: [labelId], references: [id], onDelete: SetNull)
+
+  @@unique([monthPlanId, originalItemId])
+  @@index([monthPlanId])
+}
+
+/// A one-off item that exists only inside a single month's plan.
+model CustomItem {
+  id          String         @id
+  monthPlanId String
+  type        BudgetItemType
+  name        String
+  amount      Decimal        @db.Decimal(14, 2)
+  day         Int
+  accountId   String?
+  labelId     String?
+  isPaid      Boolean        @default(false)
+  notes       String?
+
+  monthPlan MonthPlan    @relation(fields: [monthPlanId], references: [id], onDelete: Cascade)
+  account   BankAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  label     Label?       @relation(fields: [labelId], references: [id], onDelete: SetNull)
+
+  @@index([monthPlanId])
+}
+
+/// Per-month display order for catalog and custom items in the monthly plan.
+/// Catalog `position` stays global; this is the month-only order.
+model PlanItemOrder {
+  id          String @id
+  monthPlanId String
+  itemId      String
+  position    Int    @default(0)
+
+  monthPlan MonthPlan @relation(fields: [monthPlanId], references: [id], onDelete: Cascade)
+
+  @@unique([monthPlanId, itemId])
+  @@index([monthPlanId])
+}
+
+/// Per-account opening balance for a month. Missing rows mean "use the
+/// previous month's end balance" (0 if that month has no stored openings).
+model OpeningBalance {
+  id          String  @id
+  monthPlanId String
+  accountId   String
+  amount      Decimal @db.Decimal(14, 2)
+
+  monthPlan MonthPlan   @relation(fields: [monthPlanId], references: [id], onDelete: Cascade)
+  account   BankAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([monthPlanId, accountId])
+  @@index([monthPlanId])
+}
+
+/// Marks an item (catalog or custom) as settled/paid within one month.
+model SettledItem {
+  id          String  @id
+  monthPlanId String
+  itemId      String
+  settled     Boolean @default(true)
+
+  monthPlan MonthPlan @relation(fields: [monthPlanId], references: [id], onDelete: Cascade)
+
+  @@unique([monthPlanId, itemId])
+  @@index([monthPlanId])
+}
+
+/// A saved catalog table: frozen filters and sort, shared with the whole house.
+model CatalogTableView {
+  id         String   @id
+  houseId    String
+  name       String
+  position   Int      @default(0)
+  kindIds    String[]
+  accountIds String[]
+  labelIds   String[]
+  sortKey    String
+  sortDir    String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  house House @relation(fields: [houseId], references: [id], onDelete: Cascade)
+
+  @@index([houseId, position])
+}
